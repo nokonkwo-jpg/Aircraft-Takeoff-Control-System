@@ -1,0 +1,3 @@
+# Normalize all text files to LF
+# @Emma you can ignore this file
+* text eol=lf
