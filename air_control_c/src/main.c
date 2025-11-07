@@ -1,3 +1,19 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <signal.h>
+#include <pthread.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <string.h>
+
+#define TOTAL_TAKEOFFS 50
+#define PLANES_LIMIT 20
+
+int planes = 0;
+int takeoffs = 0;
+int total_takeoffs = 0;
 
 int main() {
   // TODO 1: Call the function that creates the shared memory segment.
