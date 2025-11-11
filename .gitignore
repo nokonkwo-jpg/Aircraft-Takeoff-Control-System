@@ -11,8 +11,6 @@ Makefile
 # Compiled executables
 air_control_c
 ground_control_c
-air_control_py
-ground_control_py
 radio
 
 # Object files
