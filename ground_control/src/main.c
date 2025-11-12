@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 int planes = 0;
@@ -18,6 +19,7 @@ int traffic = 0;
 
 /* file descriptor for the shared memory, visible to signal handlers */
 int shm_fd = -1;
+int *shm_ptr = NULL; /* mapped pointer to shared memory (3 ints) */
 
 void Traffic(int signum) {
   // TODO:
@@ -25,9 +27,29 @@ void Traffic(int signum) {
   // Check if there are 10 or more waiting planes to send a signal and increment
   // planes. Ensure signals are sent and planes are incremented only if the
   // total number of planes has not been exceeded.
-  if (traffic >= 10 && planes < PLANES_LIMIT) {
-    kill(0, SIGUSR1);
-    planes++;
+(void)signum;
+  /* Calculate waiting planes: planes available minus takeoffs cleared */
+  int waiting = planes - takeoffs;
+  traffic = waiting;
+
+  if (waiting >= 10) {
+    printf("RUNWAY OVERLOADED\n");
+  }
+
+  /* If overall planes are below the limit, add 5 and notify radio */
+  if (planes < PLANES_LIMIT) {
+    planes += 5;
+    printf("Ground: added 5 planes -> planes=%d\n", planes);
+    if (shm_ptr != NULL) {
+      pid_t radio_pid = (pid_t)shm_ptr[1];
+      if (radio_pid > 0) {
+        if (kill(radio_pid, SIGUSR2) == -1) {
+          perror("Ground: failed to signal radio");
+        } else {
+          printf("Ground: signaled radio (pid=%d) with SIGUSR2\n", radio_pid);
+        }
+      }
+    }
   }
 }
 
@@ -35,8 +57,14 @@ void Traffic(int signum) {
 static void term_handler(int signum) {
   (void)signum;
   printf("finalization of operations...\n");
+  /* Close and unmap shared memory before exiting */
+  if (shm_ptr != NULL && shm_ptr != MAP_FAILED) {
+    munmap(shm_ptr, 3 * sizeof(int));
+    shm_ptr = NULL;
+  }
   if (shm_fd != -1) {
     close(shm_fd);
+    shm_fd = -1;
   }
   exit(0);
 }
@@ -51,12 +79,24 @@ int main(int argc, char* argv[]) {
   // TODO:
   // 1. Open the shared memory block and store this process PID in position 2
   //    of the memory block.
-  const char* shm_name = "/my_shm";
-  shm_fd = shm_open(shm_name, O_RDWR | O_CREAT, 0666);
+  const char* shm_name = "/air_traffic_shm";
+  /* Open existing shared memory created by the air control process */
+  shm_fd = shm_open(shm_name, O_RDWR, 0666);
   if (shm_fd == -1) {
     perror("shm_open");
     exit(1);
   }
+
+  /* Map three integers: [air_pid, radio_pid, ground_pid] */
+  shm_ptr = mmap(NULL, 3 * sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+  if (shm_ptr == MAP_FAILED) {
+    perror("mmap");
+    close(shm_fd);
+    exit(1);
+  }
+
+  /* Store our PID in position 2 */
+  shm_ptr[2] = getpid();
 
   // 2. Configure SIGTERM and SIGUSR1 handlers
   //    - The SIGTERM handler should: close the shared memory, print
@@ -77,6 +117,26 @@ int main(int argc, char* argv[]) {
   sigemptyset(&sa_usr1.sa_mask);
   sa_usr1.sa_flags = 0;
   sigaction(SIGUSR1, &sa_usr1, NULL);
+  
+  /* Configure SIGALRM to call Traffic every 500ms */
+  struct sigaction sa_alrm;
+  memset(&sa_alrm, 0, sizeof(sa_alrm));
+  sa_alrm.sa_handler = Traffic;
+  sigemptyset(&sa_alrm.sa_mask);
+  sa_alrm.sa_flags = 0;
+  sigaction(SIGALRM, &sa_alrm, NULL);
+
+  struct itimerval timer;
+  timer.it_value.tv_sec = 0;
+  timer.it_value.tv_usec = 500000; /* 500 ms */
+  timer.it_interval.tv_sec = 0;
+  timer.it_interval.tv_usec = 500000; /* 500 ms */
+  if (setitimer(ITIMER_REAL, &timer, NULL) == -1) {
+    perror("setitimer");
+    if (shm_ptr && shm_ptr != MAP_FAILED) munmap(shm_ptr, 3 * sizeof(int));
+    close(shm_fd);
+    exit(1);
+  }
   printf("Ground control running (PID %d)\n", getpid());
   while (1) {
     pause();  // Wait for signals
