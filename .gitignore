@@ -9,8 +9,6 @@ Makefile
 *.cmake
 
 # Compiled executables
-air_control_c
-ground_control_c
 radio
 
 # Object files
